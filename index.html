@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Snake</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #161a22;
+    --accent: #4ade80;
+    --accent-dim: #16a34a;
+    --text: #e5e7eb;
+    --muted: #9ca3af;
+    --grid: #1f2430;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 20px;
+  }
+  h1 {
+    margin: 0 0 12px;
+    letter-spacing: 2px;
+    color: var(--accent);
+    font-weight: 700;
+  }
+  .hud {
+    display: flex;
+    gap: 24px;
+    margin-bottom: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+  .hud span b { color: var(--accent); }
+  .stage {
+    background: var(--panel);
+    padding: 12px;
+    border-radius: 12px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+  }
+  canvas {
+    display: block;
+    background: var(--bg);
+    border-radius: 8px;
+    image-rendering: pixelated;
+  }
+  .footer {
+    margin-top: 14px;
+    color: var(--muted);
+    font-size: 13px;
+    text-align: center;
+    line-height: 1.6;
+  }
+  kbd {
+    background: #222836;
+    border: 1px solid #2a3142;
+    border-bottom-width: 2px;
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 12px;
+    color: var(--text);
+  }
+  .overlay {
+    position: absolute;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: rgba(15, 17, 21, 0.78);
+    border-radius: 8px;
+    flex-direction: column;
+    gap: 6px;
+    color: var(--text);
+    pointer-events: none;
+  }
+  .overlay.show { display: flex; }
+  .overlay .title { font-size: 22px; color: var(--accent); font-weight: 700; }
+  .overlay .sub { color: var(--muted); font-size: 13px; }
+  .stage-wrap { position: relative; }
+  button.toggle {
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid #2a3142;
+    border-radius: 6px;
+    padding: 3px 12px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 14px;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  button.toggle:hover { background: #1f2430; }
+  button.toggle.on {
+    background: var(--accent-dim);
+    color: white;
+    border-color: var(--accent);
+  }
+</style>
+</head>
+<body>
+  <h1>SNAKE</h1>
+  <div class="hud">
+    <span>Score: <b id="score">0</b></span>
+    <span>Best: <b id="best">0</b></span>
+    <button id="autoBtn" class="toggle" type="button">Auto: OFF</button>
+  </div>
+  <div class="stage-wrap">
+    <div class="stage">
+      <canvas id="board" width="400" height="400"></canvas>
+    </div>
+    <div class="overlay" id="overlay">
+      <div class="title" id="overlayTitle">Press any key to start</div>
+      <div class="sub" id="overlaySub">Arrow keys or WASD to move</div>
+    </div>
+  </div>
+  <div class="footer">
+    Move: <kbd>&larr;</kbd><kbd>&uarr;</kbd><kbd>&darr;</kbd><kbd>&rarr;</kbd> or <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>
+    &nbsp;·&nbsp; Pause: <kbd>Space</kbd> &nbsp;·&nbsp; Restart: <kbd>R</kbd>
+  </div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('board');
+  const ctx = canvas.getContext('2d');
+  const scoreEl = document.getElementById('score');
+  const bestEl = document.getElementById('best');
+  const overlay = document.getElementById('overlay');
+  const overlayTitle = document.getElementById('overlayTitle');
+  const overlaySub = document.getElementById('overlaySub');
+  const autoBtn = document.getElementById('autoBtn');
+  let autoPlay = false;
+
+  const CELL = 20;
+  const COLS = canvas.width / CELL;
+  const ROWS = canvas.height / CELL;
+
+  const STATE = { READY: 0, PLAYING: 1, PAUSED: 2, OVER: 3 };
+
+  let snake, dir, nextDir, foods, superFood, pendingGrowth, score, best, state, tickMs, accumulator, lastTime;
+  const FOOD_COUNT = 2;
+  const SUPER_FOOD_GROWTH = 2;
+
+  best = parseInt(localStorage.getItem('snake_best') || '0', 10);
+  bestEl.textContent = best;
+
+  function reset() {
+    const cx = Math.floor(COLS / 2);
+    const cy = Math.floor(ROWS / 2);
+    snake = [
+      { x: cx - 1, y: cy },
+      { x: cx, y: cy },
+      { x: cx + 1, y: cy },
+    ];
+    dir = { x: 1, y: 0 };
+    nextDir = dir;
+    score = 0;
+    tickMs = 110;
+    accumulator = 0;
+    lastTime = 0;
+    foods = [];
+    superFood = null;
+    pendingGrowth = 0;
+    while (foods.length < FOOD_COUNT) addFood();
+    placeSuperFood();
+    scoreEl.textContent = score;
+    state = STATE.READY;
+    showOverlay('Press any key to start', 'Arrow keys or WASD to move');
+  }
+
+  function isOccupied(x, y) {
+    if (snake.some(s => s.x === x && s.y === y)) return true;
+    if (foods.some(f => f.x === x && f.y === y)) return true;
+    if (superFood && superFood.x === x && superFood.y === y) return true;
+    return false;
+  }
+
+  function randomFreeCell() {
+    const occupied = snake.length + foods.length + (superFood ? 1 : 0);
+    if (occupied >= COLS * ROWS) return null;
+    while (true) {
+      const x = Math.floor(Math.random() * COLS);
+      const y = Math.floor(Math.random() * ROWS);
+      if (!isOccupied(x, y)) return { x, y };
+    }
+  }
+
+  function addFood() {
+    const c = randomFreeCell();
+    if (c) foods.push(c);
+  }
+
+  function placeSuperFood() {
+    const c = randomFreeCell();
+    if (c) superFood = c;
+  }
+
+  function showOverlay(title, sub) {
+    overlayTitle.textContent = title;
+    overlaySub.textContent = sub;
+    overlay.classList.add('show');
+  }
+  function hideOverlay() { overlay.classList.remove('show'); }
+
+  function neighbors(x, y) {
+    return [
+      { x: (x + 1) % COLS, y, dx: 1, dy: 0 },
+      { x: (x - 1 + COLS) % COLS, y, dx: -1, dy: 0 },
+      { x, y: (y + 1) % ROWS, dx: 0, dy: 1 },
+      { x, y: (y - 1 + ROWS) % ROWS, dx: 0, dy: -1 },
+    ];
+  }
+
+  function bodyBlocked(snakeArr) {
+    const s = new Set();
+    for (let i = 1; i < snakeArr.length - 1; i++) {
+      s.add(snakeArr[i].x + ',' + snakeArr[i].y);
+    }
+    return s;
+  }
+
+  function bfsPath(start, isTarget, blocked) {
+    if (isTarget(start.x, start.y)) return [{ x: start.x, y: start.y }];
+    const parents = new Map();
+    parents.set(start.x + ',' + start.y, null);
+    const queue = [{ x: start.x, y: start.y }];
+    let target = null;
+    while (queue.length) {
+      const node = queue.shift();
+      for (const n of neighbors(node.x, node.y)) {
+        const k = n.x + ',' + n.y;
+        if (parents.has(k) || blocked.has(k)) continue;
+        parents.set(k, { x: node.x, y: node.y });
+        if (isTarget(n.x, n.y)) { target = { x: n.x, y: n.y }; queue.length = 0; break; }
+        queue.push({ x: n.x, y: n.y });
+      }
+    }
+    if (!target) return null;
+    const path = [];
+    let cur = target;
+    while (cur) {
+      path.push({ x: cur.x, y: cur.y });
+      cur = parents.get(cur.x + ',' + cur.y);
+    }
+    path.reverse();
+    return path;
+  }
+
+  function bfsAllTargets(start, targets, blocked) {
+    const targetSet = new Set(targets.map(t => t.x + ',' + t.y));
+    const found = [];
+    const parents = new Map();
+    parents.set(start.x + ',' + start.y, null);
+    const queue = [{ x: start.x, y: start.y }];
+    while (queue.length && found.length < targetSet.size) {
+      const node = queue.shift();
+      if (targetSet.has(node.x + ',' + node.y)) {
+        const path = [];
+        let cur = node;
+        while (cur) {
+          path.push({ x: cur.x, y: cur.y });
+          cur = parents.get(cur.x + ',' + cur.y);
+        }
+        path.reverse();
+        if (path.length > 1) found.push({ path });
+      }
+      for (const n of neighbors(node.x, node.y)) {
+        const k = n.x + ',' + n.y;
+        if (parents.has(k) || blocked.has(k)) continue;
+        parents.set(k, { x: node.x, y: node.y });
+        queue.push({ x: n.x, y: n.y });
+      }
+    }
+    return found;
+  }
+
+  function simulatePath(snakeArr, path, initialPending) {
+    const sim = snakeArr.map(c => ({ x: c.x, y: c.y }));
+    let pending = initialPending;
+    for (let i = 1; i < path.length; i++) {
+      const next = path[i];
+      const isFoodCell = (i === path.length - 1);
+      const willShift = pending === 0 && !isFoodCell;
+      for (let j = willShift ? 1 : 0; j < sim.length; j++) {
+        if (sim[j].x === next.x && sim[j].y === next.y) return null;
+      }
+      sim.push({ x: next.x, y: next.y });
+      if (isFoodCell) {
+        const isSuper = superFood && superFood.x === next.x && superFood.y === next.y;
+        pending += isSuper ? SUPER_FOOD_GROWTH : 1;
+      }
+      if (pending > 0) pending -= 1;
+      else sim.shift();
+    }
+    return sim;
+  }
+
+  function dirFromTo(from, to, mod) {
+    const d = (to - from + mod) % mod;
+    if (d === 1) return 1;
+    if (d === mod - 1) return -1;
+    return 0;
+  }
+
+  function applyFirstStep(head, path) {
+    const next = path[1];
+    setDir(dirFromTo(head.x, next.x, COLS), dirFromTo(head.y, next.y, ROWS));
+  }
+
+  function autoMove() {
+    const head = snake[snake.length - 1];
+    const blocked = bodyBlocked(snake);
+
+    const targets = foods.slice();
+    if (superFood) targets.push(superFood);
+
+    const candidates = bfsAllTargets(head, targets, blocked);
+    for (const cand of candidates) {
+      const sim = simulatePath(snake, cand.path, pendingGrowth);
+      if (!sim) continue;
+      const simHead = sim[sim.length - 1];
+      const simTail = sim[0];
+      const simBlocked = bodyBlocked(sim);
+      const escape = bfsPath(simHead, (x, y) => x === simTail.x && y === simTail.y, simBlocked);
+      if (escape) { applyFirstStep(head, cand.path); return; }
+    }
+
+    const tail = snake[0];
+    const tailPath = bfsPath(head, (x, y) => x === tail.x && y === tail.y, blocked);
+    if (tailPath && tailPath.length > 1) { applyFirstStep(head, tailPath); return; }
+
+    let best = null, bestDist = -1;
+    for (const n of neighbors(head.x, head.y)) {
+      const k = n.x + ',' + n.y;
+      if (blocked.has(k)) continue;
+      if (snake.length > 1 && dir.x === -n.dx && dir.y === -n.dy) continue;
+      let minD = Infinity;
+      for (const s of snake) {
+        const ax = Math.abs(s.x - n.x), ay = Math.abs(s.y - n.y);
+        const d = Math.min(ax, COLS - ax) + Math.min(ay, ROWS - ay);
+        if (d < minD) minD = d;
+      }
+      if (minD > bestDist) { bestDist = minD; best = n; }
+    }
+    if (best) setDir(best.dx, best.dy);
+  }
+
+  function step() {
+    if (autoPlay) autoMove();
+    dir = nextDir;
+    const head = snake[snake.length - 1];
+    const nx = (head.x + dir.x + COLS) % COLS;
+    const ny = (head.y + dir.y + ROWS) % ROWS;
+
+    for (let i = 1; i < snake.length; i++) {
+      if (snake[i].x === nx && snake[i].y === ny) return gameOver();
+    }
+
+    snake.push({ x: nx, y: ny });
+
+    if (superFood && superFood.x === nx && superFood.y === ny) {
+      score += SUPER_FOOD_GROWTH;
+      scoreEl.textContent = score;
+      if (tickMs > 60) tickMs = Math.max(60, tickMs - 4);
+      pendingGrowth += SUPER_FOOD_GROWTH;
+      superFood = null;
+      placeSuperFood();
+    } else {
+      const eatenIdx = foods.findIndex(f => f.x === nx && f.y === ny);
+      if (eatenIdx !== -1) {
+        score += 1;
+        scoreEl.textContent = score;
+        if (tickMs > 60) tickMs = Math.max(60, tickMs - 2);
+        foods.splice(eatenIdx, 1);
+        pendingGrowth += 1;
+        addFood();
+      }
+    }
+
+    if (pendingGrowth > 0) {
+      pendingGrowth -= 1;
+    } else {
+      snake.shift();
+    }
+  }
+
+  function gameOver() {
+    state = STATE.OVER;
+    if (score > best) {
+      best = score;
+      localStorage.setItem('snake_best', String(best));
+      bestEl.textContent = best;
+    }
+    showOverlay('Game Over', `Score ${score} · Press R to restart`);
+  }
+
+  function draw() {
+    ctx.fillStyle = '#0f1115';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.strokeStyle = '#1f2430';
+    ctx.lineWidth = 1;
+    for (let i = 1; i < COLS; i++) {
+      ctx.beginPath();
+      ctx.moveTo(i * CELL + 0.5, 0);
+      ctx.lineTo(i * CELL + 0.5, canvas.height);
+      ctx.stroke();
+    }
+    for (let j = 1; j < ROWS; j++) {
+      ctx.beginPath();
+      ctx.moveTo(0, j * CELL + 0.5);
+      ctx.lineTo(canvas.width, j * CELL + 0.5);
+      ctx.stroke();
+    }
+
+    ctx.fillStyle = '#ef4444';
+    for (const f of foods) drawCell(f.x, f.y);
+
+    if (superFood) drawSuperFood(superFood.x, superFood.y);
+
+    for (let i = 0; i < snake.length; i++) {
+      const s = snake[i];
+      ctx.fillStyle = i === snake.length - 1 ? '#4ade80' : '#16a34a';
+      drawCell(s.x, s.y);
+    }
+  }
+
+  function drawSuperFood(x, y) {
+    const cx = x * CELL + CELL / 2;
+    const cy = y * CELL + CELL / 2;
+    const r = (CELL - 4) / 2;
+    ctx.fillStyle = '#fbbf24';
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#f59e0b';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  function drawCell(x, y) {
+    const px = x * CELL + 1;
+    const py = y * CELL + 1;
+    const sz = CELL - 2;
+    const r = 4;
+    ctx.beginPath();
+    ctx.moveTo(px + r, py);
+    ctx.arcTo(px + sz, py, px + sz, py + sz, r);
+    ctx.arcTo(px + sz, py + sz, px, py + sz, r);
+    ctx.arcTo(px, py + sz, px, py, r);
+    ctx.arcTo(px, py, px + sz, py, r);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function loop(t) {
+    if (!lastTime) lastTime = t;
+    const dt = t - lastTime;
+    lastTime = t;
+    if (state === STATE.PLAYING) {
+      accumulator += dt;
+      while (accumulator >= tickMs) {
+        step();
+        accumulator -= tickMs;
+        if (state !== STATE.PLAYING) break;
+      }
+    }
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  function setDir(x, y) {
+    if (snake.length > 1 && dir.x === -x && dir.y === -y) return;
+    nextDir = { x, y };
+  }
+
+  document.addEventListener('keydown', (e) => {
+    const k = e.key;
+    if (state === STATE.READY) {
+      if (k === ' ' || k === 'Spacebar') return;
+      state = STATE.PLAYING;
+      hideOverlay();
+    }
+    if (k === 'ArrowUp' || k === 'w' || k === 'W') { setDir(0, -1); e.preventDefault(); }
+    else if (k === 'ArrowDown' || k === 's' || k === 'S') { setDir(0, 1); e.preventDefault(); }
+    else if (k === 'ArrowLeft' || k === 'a' || k === 'A') { setDir(-1, 0); e.preventDefault(); }
+    else if (k === 'ArrowRight' || k === 'd' || k === 'D') { setDir(1, 0); e.preventDefault(); }
+    else if (k === ' ' || k === 'Spacebar') {
+      if (state === STATE.PLAYING) { state = STATE.PAUSED; showOverlay('Paused', 'Press Space to resume'); }
+      else if (state === STATE.PAUSED) { state = STATE.PLAYING; hideOverlay(); }
+      e.preventDefault();
+    }
+    else if (k === 'r' || k === 'R') { reset(); }
+  });
+
+  autoBtn.addEventListener('click', () => {
+    autoPlay = !autoPlay;
+    autoBtn.textContent = 'Auto: ' + (autoPlay ? 'ON' : 'OFF');
+    autoBtn.classList.toggle('on', autoPlay);
+    if (autoPlay && state === STATE.READY) {
+      state = STATE.PLAYING;
+      hideOverlay();
+    }
+    autoBtn.blur();
+  });
+
+  reset();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
