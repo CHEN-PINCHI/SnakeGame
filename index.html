@@ -434,28 +434,28 @@
 
   function reorganizeMove() {
     const occupied = new Set(snake.map(s => s.x + ',' + s.y));
-    let target = null;
-    for (let k = 0; k < snake.length; k++) {
-      const p = sPathPos(k);
-      if (!occupied.has(p.x + ',' + p.y)) { target = p; break; }
-    }
-    if (!target) { reorganizing = false; return false; }
-
     const head = snake[snake.length - 1];
     const blocked = bodyBlocked(snake);
-    const path = bfsPath(head, (x, y) => x === target.x && y === target.y, blocked);
-    if (!path || path.length < 2) return false;
 
-    const sim = simulateReorgPath(snake, path, pendingGrowth);
-    if (!sim) return false;
-    const simHead = sim[sim.length - 1];
-    const simTail = sim[0];
-    const simBlocked = bodyBlocked(sim);
-    const escape = bfsPath(simHead, (x, y) => x === simTail.x && y === simTail.y, simBlocked);
-    if (!escape) return false;
-
-    applyFirstStep(head, path);
-    return true;
+    let allFilled = true;
+    for (let k = 0; k < snake.length; k++) {
+      const p = sPathPos(k);
+      if (occupied.has(p.x + ',' + p.y)) continue;
+      allFilled = false;
+      const path = bfsPath(head, (x, y) => x === p.x && y === p.y, blocked);
+      if (!path || path.length < 2) continue;
+      const sim = simulateReorgPath(snake, path, pendingGrowth);
+      if (!sim) continue;
+      const simHead = sim[sim.length - 1];
+      const simTail = sim[0];
+      const simBlocked = bodyBlocked(sim);
+      const escape = bfsPath(simHead, (x, y) => x === simTail.x && y === simTail.y, simBlocked);
+      if (!escape) continue;
+      applyFirstStep(head, path);
+      return true;
+    }
+    if (allFilled) reorganizing = false;
+    return false;
   }
 
   function simulateReorgPath(snakeArr, path, initialPending) {
