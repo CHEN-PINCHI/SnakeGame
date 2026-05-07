@@ -114,6 +114,7 @@
   <div class="hud">
     <span>Score: <b id="score">0</b></span>
     <span>Best: <b id="best">0</b></span>
+    <span>Time: <b id="time">00:00</b></span>
     <button id="autoBtn" class="toggle" type="button">Auto: OFF</button>
   </div>
   <div class="stage-wrap">
@@ -136,6 +137,7 @@
   const ctx = canvas.getContext('2d');
   const scoreEl = document.getElementById('score');
   const bestEl = document.getElementById('best');
+  const timeEl = document.getElementById('time');
   const overlay = document.getElementById('overlay');
   const overlayTitle = document.getElementById('overlayTitle');
   const overlaySub = document.getElementById('overlaySub');
@@ -148,7 +150,7 @@
 
   const STATE = { READY: 0, PLAYING: 1, PAUSED: 2, OVER: 3 };
 
-  let snake, dir, nextDir, foods, superFood, pendingGrowth, score, best, state, tickMs, accumulator, lastTime;
+  let snake, dir, nextDir, foods, superFood, pendingGrowth, score, best, state, tickMs, accumulator, lastTime, reorganizing, foodsSinceReorg, playElapsed;
   const FOOD_COUNT = 2;
   const SUPER_FOOD_GROWTH = 2;
 
@@ -172,7 +174,15 @@
     foods = [];
     superFood = null;
     pendingGrowth = 0;
-    while (foods.length < FOOD_COUNT) addFood();
+    reorganizing = false;
+    foodsSinceReorg = 0;
+    playElapsed = 0;
+    timeEl.textContent = '00:00';
+    while (foods.length < FOOD_COUNT) {
+      const before = foods.length;
+      addFood();
+      if (foods.length === before) break;
+    }
     placeSuperFood();
     scoreEl.textContent = score;
     state = STATE.READY;
@@ -196,12 +206,18 @@
     }
   }
 
+  function freeCells() {
+    return COLS * ROWS - snake.length - pendingGrowth - foods.length - (superFood ? 1 : 0);
+  }
+
   function addFood() {
+    if (freeCells() <= 1) return;
     const c = randomFreeCell();
     if (c) foods.push(c);
   }
 
   function placeSuperFood() {
+    if (freeCells() <= 1) return;
     const c = randomFreeCell();
     if (c) superFood = c;
   }
@@ -319,6 +335,8 @@
   }
 
   function autoMove() {
+    if (reorganizing && reorganizeMove()) return;
+
     const head = snake[snake.length - 1];
     const blocked = bodyBlocked(snake);
 
@@ -369,6 +387,7 @@
 
     snake.push({ x: nx, y: ny });
 
+    let ateFood = false;
     if (superFood && superFood.x === nx && superFood.y === ny) {
       score += SUPER_FOOD_GROWTH;
       scoreEl.textContent = score;
@@ -376,6 +395,7 @@
       pendingGrowth += SUPER_FOOD_GROWTH;
       superFood = null;
       placeSuperFood();
+      ateFood = true;
     } else {
       const eatenIdx = foods.findIndex(f => f.x === nx && f.y === ny);
       if (eatenIdx !== -1) {
@@ -385,6 +405,7 @@
         foods.splice(eatenIdx, 1);
         pendingGrowth += 1;
         addFood();
+        ateFood = true;
       }
     }
 
@@ -393,6 +414,67 @@
     } else {
       snake.shift();
     }
+
+    if (ateFood && autoPlay) {
+      foodsSinceReorg += 1;
+      const trigger = score > 200 ? 1 : (score > 100 ? 5 : Infinity);
+      if (foodsSinceReorg >= trigger) {
+        reorganizing = true;
+        foodsSinceReorg = 0;
+      }
+    }
+  }
+
+  function sPathPos(k) {
+    const row = Math.floor(k / COLS);
+    const colMod = k % COLS;
+    const x = (row % 2 === 0) ? colMod : (COLS - 1 - colMod);
+    return { x, y: row };
+  }
+
+  function reorganizeMove() {
+    const occupied = new Set(snake.map(s => s.x + ',' + s.y));
+    let target = null;
+    for (let k = 0; k < snake.length; k++) {
+      const p = sPathPos(k);
+      if (!occupied.has(p.x + ',' + p.y)) { target = p; break; }
+    }
+    if (!target) { reorganizing = false; return false; }
+
+    const head = snake[snake.length - 1];
+    const blocked = bodyBlocked(snake);
+    const path = bfsPath(head, (x, y) => x === target.x && y === target.y, blocked);
+    if (!path || path.length < 2) return false;
+
+    const sim = simulateReorgPath(snake, path, pendingGrowth);
+    if (!sim) return false;
+    const simHead = sim[sim.length - 1];
+    const simTail = sim[0];
+    const simBlocked = bodyBlocked(sim);
+    const escape = bfsPath(simHead, (x, y) => x === simTail.x && y === simTail.y, simBlocked);
+    if (!escape) return false;
+
+    applyFirstStep(head, path);
+    return true;
+  }
+
+  function simulateReorgPath(snakeArr, path, initialPending) {
+    const sim = snakeArr.map(c => ({ x: c.x, y: c.y }));
+    const foodSet = new Set(foods.map(f => f.x + ',' + f.y));
+    let pending = initialPending;
+    for (let i = 1; i < path.length; i++) {
+      const next = path[i];
+      const willShift = pending === 0;
+      for (let j = willShift ? 1 : 0; j < sim.length; j++) {
+        if (sim[j].x === next.x && sim[j].y === next.y) return null;
+      }
+      sim.push({ x: next.x, y: next.y });
+      if (foodSet.has(next.x + ',' + next.y)) pending += 1;
+      else if (superFood && superFood.x === next.x && superFood.y === next.y) pending += SUPER_FOOD_GROWTH;
+      if (pending > 0) pending -= 1;
+      else sim.shift();
+    }
+    return sim;
   }
 
   function gameOver() {
@@ -464,11 +546,20 @@
     ctx.fill();
   }
 
+  function formatTime(ms) {
+    const total = Math.floor(ms / 1000);
+    const m = Math.floor(total / 60);
+    const s = total % 60;
+    return String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+  }
+
   function loop(t) {
     if (!lastTime) lastTime = t;
     const dt = t - lastTime;
     lastTime = t;
     if (state === STATE.PLAYING) {
+      playElapsed += dt;
+      timeEl.textContent = formatTime(playElapsed);
       accumulator += dt;
       while (accumulator >= tickMs) {
         step();
@@ -508,6 +599,7 @@
     autoPlay = !autoPlay;
     autoBtn.textContent = 'Auto: ' + (autoPlay ? 'ON' : 'OFF');
     autoBtn.classList.toggle('on', autoPlay);
+    if (!autoPlay) { reorganizing = false; foodsSinceReorg = 0; }
     if (autoPlay && state === STATE.READY) {
       state = STATE.PLAYING;
       hideOverlay();
