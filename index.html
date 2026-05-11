@@ -22,6 +22,7 @@
     background: var(--bg);
     color: var(--text);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    overscroll-behavior: none;
   }
   body {
     display: flex;
@@ -29,39 +30,61 @@
     align-items: center;
     justify-content: center;
     min-height: 100vh;
-    padding: 20px;
+    padding: 12px;
   }
   h1 {
-    margin: 0 0 12px;
+    margin: 0 0 10px;
     letter-spacing: 2px;
     color: var(--accent);
     font-weight: 700;
+    font-size: clamp(20px, 5vw, 32px);
   }
   .hud {
     display: flex;
-    gap: 24px;
-    margin-bottom: 12px;
+    gap: 16px;
+    margin-bottom: 10px;
     font-variant-numeric: tabular-nums;
+    flex-wrap: wrap;
+    justify-content: center;
+    font-size: clamp(13px, 3.5vw, 15px);
   }
   .hud span b { color: var(--accent); }
+  .stage-wrap {
+    position: relative;
+    width: min(96vmin, 480px);
+    aspect-ratio: 1;
+  }
   .stage {
     background: var(--panel);
-    padding: 12px;
+    padding: 8px;
     border-radius: 12px;
     box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    width: 100%;
+    height: 100%;
   }
   canvas {
     display: block;
+    width: 100%;
+    height: 100%;
     background: var(--bg);
     border-radius: 8px;
     image-rendering: pixelated;
+    touch-action: none;
+  }
+  .controls {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+    flex-wrap: wrap;
+    justify-content: center;
   }
   .footer {
-    margin-top: 14px;
+    margin-top: 12px;
     color: var(--muted);
-    font-size: 13px;
+    font-size: 12px;
     text-align: center;
     line-height: 1.6;
+    max-width: 480px;
   }
   kbd {
     background: #222836;
@@ -85,21 +108,24 @@
     gap: 6px;
     color: var(--text);
     pointer-events: none;
+    padding: 16px;
+    text-align: center;
   }
   .overlay.show { display: flex; }
-  .overlay .title { font-size: 22px; color: var(--accent); font-weight: 700; }
-  .overlay .sub { color: var(--muted); font-size: 13px; }
-  .stage-wrap { position: relative; }
+  .overlay .title { font-size: clamp(16px, 4vw, 22px); color: var(--accent); font-weight: 700; }
+  .overlay .sub { color: var(--muted); font-size: clamp(11px, 3vw, 13px); }
   button.toggle {
     background: var(--panel);
     color: var(--text);
     border: 1px solid #2a3142;
     border-radius: 6px;
-    padding: 3px 12px;
+    padding: 6px 14px;
     cursor: pointer;
     font: inherit;
     font-size: 14px;
     transition: background 0.15s, border-color 0.15s;
+    touch-action: manipulation;
+    min-height: 36px;
   }
   button.toggle:hover { background: #1f2430; }
   button.toggle.on {
@@ -115,20 +141,23 @@
     <span>Score: <b id="score">0</b></span>
     <span>Best: <b id="best">0</b></span>
     <span>Time: <b id="time">00:00</b></span>
-    <button id="autoBtn" class="toggle" type="button">Auto: OFF</button>
   </div>
   <div class="stage-wrap">
     <div class="stage">
       <canvas id="board" width="400" height="400"></canvas>
     </div>
     <div class="overlay" id="overlay">
-      <div class="title" id="overlayTitle">Press any key to start</div>
-      <div class="sub" id="overlaySub">Arrow keys or WASD to move</div>
+      <div class="title" id="overlayTitle">Press any key or tap to start</div>
+      <div class="sub" id="overlaySub">Arrows / WASD / swipe to move</div>
     </div>
   </div>
+  <div class="controls">
+    <button id="pauseBtn" class="toggle" type="button">Pause</button>
+    <button id="autoBtn" class="toggle" type="button">Auto: OFF</button>
+    <button id="resetBtn" class="toggle" type="button">Reset</button>
+  </div>
   <div class="footer">
-    Move: <kbd>&larr;</kbd><kbd>&uarr;</kbd><kbd>&darr;</kbd><kbd>&rarr;</kbd> or <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>
-    &nbsp;·&nbsp; Pause: <kbd>Space</kbd> &nbsp;·&nbsp; Restart: <kbd>R</kbd>
+    Swipe or <kbd>&larr;</kbd><kbd>&uarr;</kbd><kbd>&darr;</kbd><kbd>&rarr;</kbd> / <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> to move
   </div>
 
 <script>
@@ -142,6 +171,8 @@
   const overlayTitle = document.getElementById('overlayTitle');
   const overlaySub = document.getElementById('overlaySub');
   const autoBtn = document.getElementById('autoBtn');
+  const pauseBtn = document.getElementById('pauseBtn');
+  const resetBtn = document.getElementById('resetBtn');
   let autoPlay = false;
 
   const CELL = 20;
@@ -185,7 +216,8 @@
     placeSuperFood();
     scoreEl.textContent = score;
     state = STATE.READY;
-    showOverlay('Press any key to start', 'Arrow keys or WASD to move');
+    pauseBtn.textContent = 'Pause';
+    showOverlay('Press any key or tap to start', 'Arrows / WASD / swipe to move');
   }
 
   function isOccupied(x, y) {
@@ -538,12 +570,23 @@
     else if (k === 'ArrowLeft' || k === 'a' || k === 'A') { setDir(-1, 0); e.preventDefault(); }
     else if (k === 'ArrowRight' || k === 'd' || k === 'D') { setDir(1, 0); e.preventDefault(); }
     else if (k === ' ' || k === 'Spacebar') {
-      if (state === STATE.PLAYING) { state = STATE.PAUSED; showOverlay('Paused', 'Press Space to resume'); }
-      else if (state === STATE.PAUSED) { state = STATE.PLAYING; hideOverlay(); }
+      togglePause();
       e.preventDefault();
     }
     else if (k === 'r' || k === 'R') { reset(); }
   });
+
+  function togglePause() {
+    if (state === STATE.PLAYING) {
+      state = STATE.PAUSED;
+      pauseBtn.textContent = 'Resume';
+      showOverlay('Paused', 'Tap Resume or press Space');
+    } else if (state === STATE.PAUSED) {
+      state = STATE.PLAYING;
+      pauseBtn.textContent = 'Pause';
+      hideOverlay();
+    }
+  }
 
   autoBtn.addEventListener('click', () => {
     autoPlay = !autoPlay;
@@ -555,6 +598,55 @@
     }
     autoBtn.blur();
   });
+
+  pauseBtn.addEventListener('click', () => {
+    if (state === STATE.READY) {
+      state = STATE.PLAYING;
+      hideOverlay();
+    } else {
+      togglePause();
+    }
+    pauseBtn.blur();
+  });
+
+  resetBtn.addEventListener('click', () => {
+    reset();
+    resetBtn.blur();
+  });
+
+  let touchStartX = null, touchStartY = null;
+  canvas.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1) return;
+    if (state === STATE.READY) {
+      state = STATE.PLAYING;
+      hideOverlay();
+    }
+    const t = e.touches[0];
+    touchStartX = t.clientX;
+    touchStartY = t.clientY;
+    e.preventDefault();
+  }, { passive: false });
+
+  canvas.addEventListener('touchmove', (e) => {
+    if (touchStartX === null || e.touches.length !== 1) return;
+    const t = e.touches[0];
+    const dx = t.clientX - touchStartX;
+    const dy = t.clientY - touchStartY;
+    const threshold = 18;
+    if (Math.abs(dx) > threshold || Math.abs(dy) > threshold) {
+      if (Math.abs(dx) > Math.abs(dy)) setDir(dx > 0 ? 1 : -1, 0);
+      else setDir(0, dy > 0 ? 1 : -1);
+      touchStartX = t.clientX;
+      touchStartY = t.clientY;
+    }
+    e.preventDefault();
+  }, { passive: false });
+
+  canvas.addEventListener('touchend', (e) => {
+    touchStartX = null;
+    touchStartY = null;
+    e.preventDefault();
+  }, { passive: false });
 
   reset();
   requestAnimationFrame(loop);
