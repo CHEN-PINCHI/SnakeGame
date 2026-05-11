@@ -150,7 +150,8 @@
 
   const STATE = { READY: 0, PLAYING: 1, PAUSED: 2, OVER: 3 };
 
-  let snake, dir, nextDir, foods, superFood, pendingGrowth, score, best, state, tickMs, accumulator, lastTime, reorganizing, foodsSinceReorg, playElapsed;
+  let snake, dir, nextDir, foods, superFood, pendingGrowth, score, best, state, tickMs, accumulator, lastTime, playElapsed;
+  let cycleIndex = null, cycleCells = null;
   const FOOD_COUNT = 2;
   const SUPER_FOOD_GROWTH = 2;
 
@@ -174,8 +175,6 @@
     foods = [];
     superFood = null;
     pendingGrowth = 0;
-    reorganizing = false;
-    foodsSinceReorg = 0;
     playElapsed = 0;
     timeEl.textContent = '00:00';
     while (foods.length < FOOD_COUNT) {
@@ -273,55 +272,6 @@
     return path;
   }
 
-  function bfsAllTargets(start, targets, blocked) {
-    const targetSet = new Set(targets.map(t => t.x + ',' + t.y));
-    const found = [];
-    const parents = new Map();
-    parents.set(start.x + ',' + start.y, null);
-    const queue = [{ x: start.x, y: start.y }];
-    while (queue.length && found.length < targetSet.size) {
-      const node = queue.shift();
-      if (targetSet.has(node.x + ',' + node.y)) {
-        const path = [];
-        let cur = node;
-        while (cur) {
-          path.push({ x: cur.x, y: cur.y });
-          cur = parents.get(cur.x + ',' + cur.y);
-        }
-        path.reverse();
-        if (path.length > 1) found.push({ path });
-      }
-      for (const n of neighbors(node.x, node.y)) {
-        const k = n.x + ',' + n.y;
-        if (parents.has(k) || blocked.has(k)) continue;
-        parents.set(k, { x: node.x, y: node.y });
-        queue.push({ x: n.x, y: n.y });
-      }
-    }
-    return found;
-  }
-
-  function simulatePath(snakeArr, path, initialPending) {
-    const sim = snakeArr.map(c => ({ x: c.x, y: c.y }));
-    let pending = initialPending;
-    for (let i = 1; i < path.length; i++) {
-      const next = path[i];
-      const isFoodCell = (i === path.length - 1);
-      const willShift = pending === 0 && !isFoodCell;
-      for (let j = willShift ? 1 : 0; j < sim.length; j++) {
-        if (sim[j].x === next.x && sim[j].y === next.y) return null;
-      }
-      sim.push({ x: next.x, y: next.y });
-      if (isFoodCell) {
-        const isSuper = superFood && superFood.x === next.x && superFood.y === next.y;
-        pending += isSuper ? SUPER_FOOD_GROWTH : 1;
-      }
-      if (pending > 0) pending -= 1;
-      else sim.shift();
-    }
-    return sim;
-  }
-
   function dirFromTo(from, to, mod) {
     const d = (to - from + mod) % mod;
     if (d === 1) return 1;
@@ -334,44 +284,95 @@
     setDir(dirFromTo(head.x, next.x, COLS), dirFromTo(head.y, next.y, ROWS));
   }
 
+  function buildCycle() {
+    if (cycleIndex) return;
+    const N = COLS * ROWS;
+    cycleIndex = new Array(N);
+    cycleCells = new Array(N);
+    let i = 0;
+    const add = (x, y) => {
+      cycleIndex[y * COLS + x] = i;
+      cycleCells[i] = { x, y };
+      i++;
+    };
+    for (let x = 0; x < COLS; x++) add(x, 0);
+    for (let y = 1; y < ROWS; y++) {
+      if (y % 2 === 1) for (let x = COLS - 1; x >= 1; x--) add(x, y);
+      else for (let x = 1; x < COLS; x++) add(x, y);
+    }
+    for (let y = ROWS - 1; y >= 1; y--) add(0, y);
+  }
+
   function autoMove() {
-    if (reorganizing && reorganizeMove()) return;
-
+    buildCycle();
+    const N = COLS * ROWS;
     const head = snake[snake.length - 1];
-    const blocked = bodyBlocked(snake);
+    const tail = snake[0];
+    const headIdx = cycleIndex[head.y * COLS + head.x];
+    const tailIdx = cycleIndex[tail.y * COLS + tail.x];
 
-    const targets = foods.slice();
-    if (superFood) targets.push(superFood);
+    let foodIdx = -1, foodDist = Infinity;
+    const considerFood = (idx) => {
+      const d = (idx - headIdx + N) % N;
+      if (d > 0 && d < foodDist) { foodDist = d; foodIdx = idx; }
+    };
+    for (const f of foods) considerFood(cycleIndex[f.y * COLS + f.x]);
+    if (superFood) considerFood(cycleIndex[superFood.y * COLS + superFood.x]);
 
-    const candidates = bfsAllTargets(head, targets, blocked);
-    for (const cand of candidates) {
-      const sim = simulatePath(snake, cand.path, pendingGrowth);
-      if (!sim) continue;
-      const simHead = sim[sim.length - 1];
-      const simTail = sim[0];
-      const simBlocked = bodyBlocked(sim);
-      const escape = bfsPath(simHead, (x, y) => x === simTail.x && y === simTail.y, simBlocked);
-      if (escape) { applyFirstStep(head, cand.path); return; }
+    const headToTail = snake.length > 1 ? (tailIdx - headIdx + N) % N : N;
+    const snakeLen = snake.length + pendingGrowth;
+    let maxShortcut = 0;
+    if (snakeLen < N / 2) {
+      maxShortcut = Math.max(0, headToTail - snakeLen - 4);
     }
 
-    const tail = snake[0];
-    const tailPath = bfsPath(head, (x, y) => x === tail.x && y === tail.y, blocked);
+    let chosenN = null;
+    let bestSkip = 0;
+    if (foodIdx !== -1 && maxShortcut > 0) {
+      for (const n of neighbors(head.x, head.y)) {
+        if (snake.length > 1 && dir.x === -n.dx && dir.y === -n.dy) continue;
+        let collision = false;
+        for (let i = 1; i < snake.length; i++) {
+          if (snake[i].x === n.x && snake[i].y === n.y) { collision = true; break; }
+        }
+        if (collision) continue;
+        const nIdx = cycleIndex[n.y * COLS + n.x];
+        const nDistFromHead = (nIdx - headIdx + N) % N;
+        if (nDistFromHead < 1 || nDistFromHead > maxShortcut) continue;
+        const nDistToFood = (foodIdx - nIdx + N) % N;
+        if (nDistToFood >= foodDist) continue;
+        if (nDistFromHead > bestSkip) {
+          bestSkip = nDistFromHead;
+          chosenN = n;
+        }
+      }
+    }
+
+    if (chosenN) {
+      setDir(chosenN.dx, chosenN.dy);
+      return;
+    }
+
+    const nextCell = cycleCells[(headIdx + 1) % N];
+    let blockedNext = false;
+    for (let i = 1; i < snake.length; i++) {
+      if (snake[i].x === nextCell.x && snake[i].y === nextCell.y) { blockedNext = true; break; }
+    }
+    if (!blockedNext) {
+      setDir(nextCell.x - head.x, nextCell.y - head.y);
+      return;
+    }
+
+    const blockedSet = bodyBlocked(snake);
+    const tailPath = bfsPath(head, (x, y) => x === tail.x && y === tail.y, blockedSet);
     if (tailPath && tailPath.length > 1) { applyFirstStep(head, tailPath); return; }
 
-    let best = null, bestDist = -1;
     for (const n of neighbors(head.x, head.y)) {
-      const k = n.x + ',' + n.y;
-      if (blocked.has(k)) continue;
       if (snake.length > 1 && dir.x === -n.dx && dir.y === -n.dy) continue;
-      let minD = Infinity;
-      for (const s of snake) {
-        const ax = Math.abs(s.x - n.x), ay = Math.abs(s.y - n.y);
-        const d = Math.min(ax, COLS - ax) + Math.min(ay, ROWS - ay);
-        if (d < minD) minD = d;
-      }
-      if (minD > bestDist) { bestDist = minD; best = n; }
+      if (blockedSet.has(n.x + ',' + n.y)) continue;
+      setDir(n.dx, n.dy);
+      return;
     }
-    if (best) setDir(best.dx, best.dy);
   }
 
   function step() {
@@ -415,66 +416,15 @@
       snake.shift();
     }
 
-    if (ateFood && autoPlay) {
-      foodsSinceReorg += 1;
-      const trigger = score > 200 ? 1 : (score > 100 ? 5 : Infinity);
-      if (foodsSinceReorg >= trigger) {
-        reorganizing = true;
-        foodsSinceReorg = 0;
+    if (snake.length === COLS * ROWS) {
+      state = STATE.OVER;
+      if (score > best) {
+        best = score;
+        localStorage.setItem('snake_best', String(best));
+        bestEl.textContent = best;
       }
+      showOverlay('Board Cleared!', `Score ${score} · Press R to restart`);
     }
-  }
-
-  function sPathPos(k) {
-    const row = Math.floor(k / COLS);
-    const colMod = k % COLS;
-    const x = (row % 2 === 0) ? colMod : (COLS - 1 - colMod);
-    return { x, y: row };
-  }
-
-  function reorganizeMove() {
-    const occupied = new Set(snake.map(s => s.x + ',' + s.y));
-    const head = snake[snake.length - 1];
-    const blocked = bodyBlocked(snake);
-
-    let allFilled = true;
-    for (let k = 0; k < snake.length; k++) {
-      const p = sPathPos(k);
-      if (occupied.has(p.x + ',' + p.y)) continue;
-      allFilled = false;
-      const path = bfsPath(head, (x, y) => x === p.x && y === p.y, blocked);
-      if (!path || path.length < 2) continue;
-      const sim = simulateReorgPath(snake, path, pendingGrowth);
-      if (!sim) continue;
-      const simHead = sim[sim.length - 1];
-      const simTail = sim[0];
-      const simBlocked = bodyBlocked(sim);
-      const escape = bfsPath(simHead, (x, y) => x === simTail.x && y === simTail.y, simBlocked);
-      if (!escape) continue;
-      applyFirstStep(head, path);
-      return true;
-    }
-    if (allFilled) reorganizing = false;
-    return false;
-  }
-
-  function simulateReorgPath(snakeArr, path, initialPending) {
-    const sim = snakeArr.map(c => ({ x: c.x, y: c.y }));
-    const foodSet = new Set(foods.map(f => f.x + ',' + f.y));
-    let pending = initialPending;
-    for (let i = 1; i < path.length; i++) {
-      const next = path[i];
-      const willShift = pending === 0;
-      for (let j = willShift ? 1 : 0; j < sim.length; j++) {
-        if (sim[j].x === next.x && sim[j].y === next.y) return null;
-      }
-      sim.push({ x: next.x, y: next.y });
-      if (foodSet.has(next.x + ',' + next.y)) pending += 1;
-      else if (superFood && superFood.x === next.x && superFood.y === next.y) pending += SUPER_FOOD_GROWTH;
-      if (pending > 0) pending -= 1;
-      else sim.shift();
-    }
-    return sim;
   }
 
   function gameOver() {
@@ -599,7 +549,6 @@
     autoPlay = !autoPlay;
     autoBtn.textContent = 'Auto: ' + (autoPlay ? 'ON' : 'OFF');
     autoBtn.classList.toggle('on', autoPlay);
-    if (!autoPlay) { reorganizing = false; foodsSinceReorg = 0; }
     if (autoPlay && state === STATE.READY) {
       state = STATE.PLAYING;
       hideOverlay();
