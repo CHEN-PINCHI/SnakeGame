@@ -210,13 +210,13 @@
   }
 
   function addFood() {
-    if (freeCells() <= 1) return;
+    if (freeCells() <= 0) return;
     const c = randomFreeCell();
     if (c) foods.push(c);
   }
 
   function placeSuperFood() {
-    if (freeCells() <= 1) return;
+    if (freeCells() <= 0) return;
     const c = randomFreeCell();
     if (c) superFood = c;
   }
