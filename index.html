@@ -448,6 +448,9 @@
       snake.shift();
     }
 
+    while (foods.length < FOOD_COUNT && freeCells() > 0) addFood();
+    if (!superFood && freeCells() > 0) placeSuperFood();
+
     if (snake.length === COLS * ROWS) {
       state = STATE.OVER;
       if (score > best) {
