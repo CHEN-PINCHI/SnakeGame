@@ -68,7 +68,6 @@
     height: 100%;
     background: var(--bg);
     border-radius: 8px;
-    image-rendering: pixelated;
     touch-action: none;
   }
   .controls {
@@ -176,15 +175,46 @@
   let autoPlay = false;
 
   const CELL = 20;
-  const COLS = canvas.width / CELL;
-  const ROWS = canvas.height / CELL;
+  const LOGICAL_W = canvas.width;
+  const LOGICAL_H = canvas.height;
+  const COLS = LOGICAL_W / CELL;
+  const ROWS = LOGICAL_H / CELL;
+  const dpr = Math.max(1, window.devicePixelRatio || 1);
+  canvas.width = LOGICAL_W * dpr;
+  canvas.height = LOGICAL_H * dpr;
+  ctx.scale(dpr, dpr);
+
+  const gridCanvas = document.createElement('canvas');
+  gridCanvas.width = LOGICAL_W * dpr;
+  gridCanvas.height = LOGICAL_H * dpr;
+  const gctx = gridCanvas.getContext('2d');
+  gctx.scale(dpr, dpr);
+  gctx.fillStyle = '#0f1115';
+  gctx.fillRect(0, 0, LOGICAL_W, LOGICAL_H);
+  gctx.strokeStyle = '#1f2430';
+  gctx.lineWidth = 1;
+  gctx.beginPath();
+  for (let i = 1; i < COLS; i++) {
+    gctx.moveTo(i * CELL + 0.5, 0);
+    gctx.lineTo(i * CELL + 0.5, LOGICAL_H);
+  }
+  for (let j = 1; j < ROWS; j++) {
+    gctx.moveTo(0, j * CELL + 0.5);
+    gctx.lineTo(LOGICAL_W, j * CELL + 0.5);
+  }
+  gctx.stroke();
 
   const STATE = { READY: 0, PLAYING: 1, PAUSED: 2, OVER: 3 };
 
   let snake, dir, nextDir, foods, superFood, pendingGrowth, score, best, state, tickMs, accumulator, lastTime, playElapsed;
   let cycleIndex = null, cycleCells = null;
+  let needsRedraw = true;
   const FOOD_COUNT = 2;
   const SUPER_FOOD_GROWTH = 2;
+
+  function speedUp(amount) {
+    tickMs = Math.max(60, tickMs - amount);
+  }
 
   best = parseInt(localStorage.getItem('snake_best') || '0', 10);
   bestEl.textContent = best;
@@ -208,15 +238,12 @@
     pendingGrowth = 0;
     playElapsed = 0;
     timeEl.textContent = '00:00';
-    while (foods.length < FOOD_COUNT) {
-      const before = foods.length;
-      addFood();
-      if (foods.length === before) break;
-    }
+    for (let i = 0; i < FOOD_COUNT; i++) addFood();
     placeSuperFood();
     scoreEl.textContent = score;
     state = STATE.READY;
     pauseBtn.textContent = 'Pause';
+    needsRedraw = true;
     showOverlay('Press any key or tap to start', 'Arrows / WASD / swipe to move');
   }
 
@@ -424,7 +451,7 @@
     if (superFood && superFood.x === nx && superFood.y === ny) {
       score += SUPER_FOOD_GROWTH;
       scoreEl.textContent = score;
-      if (tickMs > 60) tickMs = Math.max(60, tickMs - 4);
+      speedUp(4);
       pendingGrowth += SUPER_FOOD_GROWTH;
       superFood = null;
       placeSuperFood();
@@ -434,7 +461,7 @@
       if (eatenIdx !== -1) {
         score += 1;
         scoreEl.textContent = score;
-        if (tickMs > 60) tickMs = Math.max(60, tickMs - 2);
+        speedUp(2);
         foods.splice(eatenIdx, 1);
         pendingGrowth += 1;
         addFood();
@@ -473,23 +500,7 @@
   }
 
   function draw() {
-    ctx.fillStyle = '#0f1115';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    ctx.strokeStyle = '#1f2430';
-    ctx.lineWidth = 1;
-    for (let i = 1; i < COLS; i++) {
-      ctx.beginPath();
-      ctx.moveTo(i * CELL + 0.5, 0);
-      ctx.lineTo(i * CELL + 0.5, canvas.height);
-      ctx.stroke();
-    }
-    for (let j = 1; j < ROWS; j++) {
-      ctx.beginPath();
-      ctx.moveTo(0, j * CELL + 0.5);
-      ctx.lineTo(canvas.width, j * CELL + 0.5);
-      ctx.stroke();
-    }
+    ctx.drawImage(gridCanvas, 0, 0, LOGICAL_W, LOGICAL_H);
 
     ctx.fillStyle = '#ef4444';
     for (const f of foods) drawCell(f.x, f.y);
@@ -540,7 +551,7 @@
 
   function loop(t) {
     if (!lastTime) lastTime = t;
-    const dt = t - lastTime;
+    const dt = Math.min(t - lastTime, 200);
     lastTime = t;
     if (state === STATE.PLAYING) {
       playElapsed += dt;
@@ -548,11 +559,15 @@
       accumulator += dt;
       while (accumulator >= tickMs) {
         step();
+        needsRedraw = true;
         accumulator -= tickMs;
         if (state !== STATE.PLAYING) break;
       }
     }
-    draw();
+    if (needsRedraw) {
+      draw();
+      needsRedraw = false;
+    }
     requestAnimationFrame(loop);
   }
 
@@ -563,8 +578,8 @@
 
   document.addEventListener('keydown', (e) => {
     const k = e.key;
-    if (state === STATE.READY) {
-      if (k === ' ' || k === 'Spacebar') return;
+    const wasReady = state === STATE.READY;
+    if (wasReady) {
       state = STATE.PLAYING;
       hideOverlay();
     }
@@ -573,7 +588,7 @@
     else if (k === 'ArrowLeft' || k === 'a' || k === 'A') { setDir(-1, 0); e.preventDefault(); }
     else if (k === 'ArrowRight' || k === 'd' || k === 'D') { setDir(1, 0); e.preventDefault(); }
     else if (k === ' ' || k === 'Spacebar') {
-      togglePause();
+      if (!wasReady) togglePause();
       e.preventDefault();
     }
     else if (k === 'r' || k === 'R') { reset(); }
